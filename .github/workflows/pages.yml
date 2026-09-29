@@ -48,6 +48,9 @@ jobs:
         working-directory: _site
         run: node --test tests/*.test.mjs
 
+      - name: Keep the browser smoke script
+        run: mkdir -p /tmp/smoke && cp -r _site/tests/smoke/. /tmp/smoke/ 2>/dev/null || true
+
       - name: Version module paths (defeat phone caches)
         run: |
           set -euo pipefail
@@ -57,6 +60,27 @@ jobs:
           sed -i "s#__BUILD__#$B#g" "_site/v$B/config.js"
           rm -rf _site/tests _site/.github _site/drop
           echo "Build $B assembled"; ls -la _site
+
+      # P12.4 — real three.js in headless Chromium (SwiftShader). Non-blocking until it has proven stable in CI.
+      - name: Browser smoke (real three.js)
+        id: smoke
+        continue-on-error: true
+        run: |
+          set -e
+          test -f /tmp/smoke/smoke.mjs || { echo "no smoke script"; exit 0; }
+          cd /tmp/smoke
+          npm init -y > /dev/null
+          npm i --no-audit --no-fund playwright@1.49.1 > /dev/null
+          npx playwright install --with-deps chromium > /dev/null
+          node smoke.mjs "$GITHUB_WORKSPACE/_site" /tmp/smoke/out
+
+      - name: Smoke screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-screenshots
+          path: /tmp/smoke/out
+          if-no-files-found: ignore
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
