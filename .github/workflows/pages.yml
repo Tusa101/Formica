@@ -1,0 +1,74 @@
+name: Test & deploy to GitHub Pages
+
+# Site = files in the repo, overridden by the newest drop/formica-*.zip (upload one zip per phase from the phone).
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Assemble site
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          for f in index.html .nojekyll src docs tests; do
+            if [ -e "$f" ]; then cp -r "$f" _site/; fi
+          done
+          latest=$(ls drop/formica-*.zip 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -n "$latest" ]; then
+            echo "Using drop archive: $latest"
+            rm -rf _drop && mkdir _drop && unzip -q "$latest" -d _drop
+            entry=$(find _drop -maxdepth 3 -name index.html | head -n 1)
+            if [ -z "$entry" ]; then echo "::error::index.html not found in $latest"; exit 1; fi
+            root=$(dirname "$entry")
+            rm -rf _site/src _site/tests
+            cp -r "$root"/. _site/
+          fi
+          test -f _site/index.html || { echo "::error::no index.html"; exit 1; }
+
+      - name: Unit tests
+        working-directory: _site
+        run: node --test tests/*.test.mjs
+
+      - name: Version module paths (defeat phone caches)
+        run: |
+          set -euo pipefail
+          B="${GITHUB_RUN_NUMBER}"
+          mv _site/src "_site/v$B"
+          sed -i "s#\./src/#./v$B/#g" _site/index.html
+          sed -i "s#__BUILD__#$B#g" "_site/v$B/config.js"
+          rm -rf _site/tests _site/.github _site/drop
+          echo "Build $B assembled"; ls -la _site
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
